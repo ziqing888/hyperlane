@@ -26,15 +26,15 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-
+# 检查日志路径是否可写
 if [ ! -w "$(dirname "$LOG_FILE")" ]; then
     error_exit "日志路径不可写，请检查权限或调整路径：$(dirname "$LOG_FILE")"
 fi
 
-
+# 设置全局变量
 DB_DIR="/opt/hyperlane_db_base"
 
-
+# 确保路径存在并赋予适当权限
 if [ ! -d "$DB_DIR" ]; then
     mkdir -p "$DB_DIR" && chmod -R 777 "$DB_DIR" || error_exit "创建数据库目录失败: $DB_DIR"
     log "${GREEN}数据库目录已创建: $DB_DIR${NC}"
@@ -42,7 +42,7 @@ else
     log "${GREEN}数据库目录已存在: $DB_DIR${NC}"
 fi
 
-
+# 检查系统环境
 check_requirements() {
     log "${YELLOW}检查系统环境...${NC}"
     CPU=$(grep -c ^processor /proc/cpuinfo)
@@ -68,7 +68,56 @@ check_requirements() {
     log "${GREEN}系统环境满足最低要求。${NC}"
 }
 
+# 安装 Docker
+install_docker() {
+    if ! command -v docker &> /dev/null; then
+        log "${YELLOW}安装 Docker...${NC}"
+        sudo apt-get update
+        sudo apt-get install -y docker.io || error_exit "安装 Docker 失败"
+        sudo systemctl start docker || error_exit "启动 Docker 服务失败"
+        sudo systemctl enable docker || error_exit "设置 Docker 开机自启失败"
+        log "${GREEN}Docker 已成功安装并启动！${NC}"
+    else
+        log "${GREEN}Docker 已安装，跳过此步骤。${NC}"
+    fi
+}
 
+# 安装 Node.js 和 NVM
+install_nvm_and_node() {
+    if ! command -v nvm &> /dev/null; then
+        log "${YELLOW}安装 NVM...${NC}"
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash || error_exit "安装 NVM 失败"
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+        log "${GREEN}NVM 已成功安装！${NC}"
+    else
+        log "${GREEN}NVM 已安装，跳过此步骤。${NC}"
+    fi
+
+    if ! command -v node &> /dev/null; then
+        log "${YELLOW}安装 Node.js v20...${NC}"
+        nvm install 20 || error_exit "安装 Node.js 失败"
+        log "${GREEN}Node.js 已成功安装！${NC}"
+    else
+        log "${GREEN}Node.js 已安装，跳过此步骤。${NC}"
+    fi
+}
+
+# 安装 Foundry
+install_foundry() {
+    if ! command -v foundryup &> /dev/null; then
+        log "${YELLOW}安装 Foundry...${NC}"
+        curl -L https://foundry.paradigm.xyz | bash || error_exit "安装 Foundry 失败"
+        source ~/.bashrc
+        foundryup || error_exit "初始化 Foundry 失败"
+        log "${GREEN}Foundry 已成功安装！${NC}"
+    else
+        log "${GREEN}Foundry 已安装，跳过此步骤。${NC}"
+    fi
+}
+
+# 安装 Hyperlane
 install_hyperlane() {
     if ! command -v hyperlane &> /dev/null; then
         log "${YELLOW}安装 Hyperlane CLI...${NC}"
@@ -87,7 +136,7 @@ install_hyperlane() {
     fi
 }
 
-
+# 配置并启动 Validator
 configure_and_start_validator() {
     log "${YELLOW}配置并启动 Validator...${NC}"
     
@@ -105,6 +154,8 @@ configure_and_start_validator() {
     
     read -p "请输入 RPC URL: " RPC_URL
 
+    CONTAINER_NAME="hyperlane"
+
     if docker ps -a --format '{{.Names}}' | grep -q "^hyperlane$"; then
         log "${YELLOW}发现已有容器名称为 'hyperlane' 的实例。${NC}"
         read -p "是否删除旧的容器并继续？(y/n): " choice
@@ -118,8 +169,6 @@ configure_and_start_validator() {
             fi
             CONTAINER_NAME=$NEW_CONTAINER_NAME
         fi
-    else
-        CONTAINER_NAME="hyperlane"
     fi
 
     docker run -d \
@@ -142,33 +191,42 @@ configure_and_start_validator() {
     log "${GREEN}Validator 已配置并启动！容器名称：$CONTAINER_NAME${NC}"
 }
 
-
+# 查看运行日志
 view_logs() {
     log "${YELLOW}检查运行日志...${NC}"
-    docker logs -f hyperlane || error_exit "查看日志失败"
+    if docker ps -a --format '{{.Names}}' | grep -q "^hyperlane$"; then
+        docker logs -f hyperlane || error_exit "查看日志失败"
+    else
+        error_exit "容器 'hyperlane' 不存在，请确认是否启动！"
+    fi
 }
 
-
+# 主菜单
 main_menu() {
     while true; do
         echo -e "${YELLOW}"
         echo "================= Hyperlane 安装脚本 ================="
         echo "1) 检查系统环境"
-        echo "2) 安装 Hyperlane"
-        echo "3) 配置并启动 Validator"
-        echo "4) 查看运行日志"
-        echo "5) 一键完成所有步骤"
+        echo "2) 安装所有依赖 (Docker, Node.js, Foundry)"
+        echo "3) 安装 Hyperlane"
+        echo "4) 配置并启动 Validator"
+        echo "5) 查看运行日志"
+        echo "6) 一键完成所有步骤"
         echo "0) 退出"
         echo "====================================================="
         echo -e "${NC}"
         read -p "请输入选项: " choice
         case $choice in
             1) check_requirements ;;
-            2) install_hyperlane ;;
-            3) configure_and_start_validator ;;
-            4) view_logs ;;
-            5) 
+            2) install_docker && install_nvm_and_node && install_foundry ;;
+            3) install_hyperlane ;;
+            4) configure_and_start_validator ;;
+            5) view_logs ;;
+            6) 
                 check_requirements
+                install_docker
+                install_nvm_and_node
+                install_foundry
                 install_hyperlane
                 configure_and_start_validator
                 view_logs
