@@ -2,13 +2,12 @@
 
 LOG_FILE="/var/log/hyperlane_setup.log"
 
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m' 
 
-
+# 显示 Logo
 curl -s https://raw.githubusercontent.com/ziqing888/logo.sh/main/logo.sh | bash
 
 log() {
@@ -21,21 +20,21 @@ error_exit() {
     exit 1
 }
 
-
+# 检查是否具有 root 权限
 if [ "$EUID" -ne 0 ]; then
     log "${RED}请以 root 权限运行此脚本！${NC}"
     exit 1
 fi
 
-
+# 检查日志路径是否可写
 if [ ! -w "$(dirname "$LOG_FILE")" ]; then
     error_exit "日志路径不可写，请检查权限或调整路径：$(dirname "$LOG_FILE")"
 fi
 
-
+# 设置全局变量
 DB_DIR="/opt/hyperlane_db_base"
 
-
+# 确保路径存在并赋予适当权限
 if [ ! -d "$DB_DIR" ]; then
     mkdir -p "$DB_DIR" && chmod -R 777 "$DB_DIR" || error_exit "创建数据库目录失败: $DB_DIR"
     log "${GREEN}数据库目录已创建: $DB_DIR${NC}"
@@ -43,7 +42,7 @@ else
     log "${GREEN}数据库目录已存在: $DB_DIR${NC}"
 fi
 
-
+# 检查系统环境
 check_requirements() {
     log "${YELLOW}检查系统环境...${NC}"
     CPU=$(grep -c ^processor /proc/cpuinfo)
@@ -69,7 +68,7 @@ check_requirements() {
     log "${GREEN}系统环境满足最低要求。${NC}"
 }
 
-
+# 安装 Hyperlane
 install_hyperlane() {
     if ! command -v hyperlane &> /dev/null; then
         log "${YELLOW}安装 Hyperlane CLI...${NC}"
@@ -88,7 +87,7 @@ install_hyperlane() {
     fi
 }
 
-
+# 配置并启动 Validator
 configure_and_start_validator() {
     log "${YELLOW}配置并启动 Validator...${NC}"
     
@@ -106,9 +105,27 @@ configure_and_start_validator() {
     
     read -p "请输入 RPC URL: " RPC_URL
 
+    # 检查是否存在名为 hyperlane 的容器
+    if docker ps -a --format '{{.Names}}' | grep -q "^hyperlane$"; then
+        log "${YELLOW}发现已有容器名称为 'hyperlane' 的实例。${NC}"
+        read -p "是否删除旧的容器并继续？(y/n): " choice
+        if [[ "$choice" == "y" ]]; then
+            docker rm -f hyperlane || error_exit "无法删除旧容器。"
+            log "${GREEN}旧容器已删除，继续启动新的容器。${NC}"
+        else
+            read -p "请输入新容器名称: " NEW_CONTAINER_NAME
+            if [[ -z "$NEW_CONTAINER_NAME" ]]; then
+                error_exit "容器名称不能为空！"
+            fi
+            CONTAINER_NAME=$NEW_CONTAINER_NAME
+        fi
+    else
+        CONTAINER_NAME="hyperlane"
+    fi
+
     docker run -d \
         -it \
-        --name hyperlane \
+        --name "$CONTAINER_NAME" \
         --mount type=bind,source="$DB_DIR",target=/hyperlane_db_base \
         gcr.io/abacus-labs-dev/hyperlane-agent:agents-v1.0.0 \
         ./validator \
@@ -123,40 +140,36 @@ configure_and_start_validator() {
         --chains.base.signer.key "$PRIVATE_KEY" \
         --chains.base.customRpcUrls "$RPC_URL" || error_exit "启动 Validator 失败"
 
-    log "${GREEN}Validator 已配置并启动！${NC}"
+    log "${GREEN}Validator 已配置并启动！容器名称：$CONTAINER_NAME${NC}"
 }
 
-
+# 查看运行日志
 view_logs() {
     log "${YELLOW}检查运行日志...${NC}"
     docker logs -f hyperlane || error_exit "查看日志失败"
 }
 
+# 主菜单
 main_menu() {
     while true; do
         echo -e "${YELLOW}"
         echo "================= Hyperlane 安装脚本 ================="
         echo "1) 检查系统环境"
-        echo "2) 安装依赖 "
-        echo "3) 安装 Hyperlane"
-        echo "4) 配置并启动 Validator"
-        echo "5) 查看运行日志"
-        echo "6) 一键完成所有步骤"
+        echo "2) 安装 Hyperlane"
+        echo "3) 配置并启动 Validator"
+        echo "4) 查看运行日志"
+        echo "5) 一键完成所有步骤"
         echo "0) 退出"
         echo "====================================================="
         echo -e "${NC}"
         read -p "请输入选项: " choice
         case $choice in
             1) check_requirements ;;
-            2) install_docker && install_nvm_and_node && install_foundry ;;
-            3) install_hyperlane ;;
-            4) configure_and_start_validator ;;
-            5) view_logs ;;
-            6) 
+            2) install_hyperlane ;;
+            3) configure_and_start_validator ;;
+            4) view_logs ;;
+            5) 
                 check_requirements
-                install_docker
-                install_nvm_and_node
-                install_foundry
                 install_hyperlane
                 configure_and_start_validator
                 view_logs
@@ -168,4 +181,3 @@ main_menu() {
 }
 
 main_menu
-
